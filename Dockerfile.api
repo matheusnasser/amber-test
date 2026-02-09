@@ -58,17 +58,15 @@ COPY --from=builder --chown=apiuser:nodejs /app/packages/database/dist ./package
 COPY --from=builder --chown=apiuser:nodejs /app/packages/database/prisma ./packages/database/prisma
 COPY --from=builder --chown=apiuser:nodejs /app/packages/database/package*.json ./packages/database/
 
-# Copy Prisma client (hoisted to root node_modules in npm workspaces)
-COPY --from=builder --chown=apiuser:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=apiuser:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=apiuser:nodejs /app/node_modules/prisma ./node_modules/prisma
-
 # Copy root files
 COPY --from=builder --chown=apiuser:nodejs /app/package*.json ./
 
 # Install production dependencies only
 ENV NODE_ENV=production
 RUN npm ci --omit=dev --workspace=@supplier-negotiation/api
+
+# Generate Prisma client AFTER npm ci (npm ci wipes node_modules)
+RUN npx prisma generate --schema ./packages/database/prisma/schema.prisma
 
 USER apiuser
 
