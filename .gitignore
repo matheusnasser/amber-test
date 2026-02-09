@@ -1,0 +1,11 @@
+node_modules/
+.next/
+dist/
+.turbo/
+.env
+*.tsbuildinfo
+data/
+.DS_Store
+.cursor/
+.agents/
+.claude/

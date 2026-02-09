@@ -1,0 +1,28 @@
+{
+  "name": "supplier-negotiation",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "db:generate": "npx dotenv -e .env -- npx prisma generate --schema packages/database/prisma/schema.prisma",
+    "db:migrate": "npx dotenv -e .env -- npx prisma migrate dev --schema packages/database/prisma/schema.prisma --name init",
+    "db:push": "npx dotenv -e .env -- npx prisma db push --schema packages/database/prisma/schema.prisma",
+    "db:seed": "npx dotenv -e .env -- npx tsx packages/database/prisma/seed.ts",
+    "db:studio": "npx dotenv -e .env -- npx prisma studio --schema packages/database/prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^11.0.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "npm@10.9.4",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

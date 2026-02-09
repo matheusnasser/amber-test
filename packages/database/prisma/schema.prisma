@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Organization (multi-tenant) ────────────────────────────────────────────
+
+model Organization {
+  id   String @id @default(cuid())
+  name String
+
+  suppliers      Supplier[]
+  quotations     Quotation[]
+  negotiations   Negotiation[]
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Supplier ───────────────────────────────────────────────────────────────
+
+model Supplier {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  code           String // e.g. "SUP-001"
+
+  // Profile
+  qualityRating Float  // 4.0, 4.7, etc.
+  priceLevel    String // "cheapest" | "mid" | "expensive"
+  leadTimeDays  Int
+  paymentTerms  String // "33/33/33", "40/60", "100"
+
+  // Simulation
+  isSimulated Boolean @default(false)
+
+  organization             Organization              @relation(fields: [organizationId], references: [id])
+  quotations               Quotation[]
+  negotiationRounds        NegotiationRound[]
+  purchaseOrderAllocations PurchaseOrderAllocation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+}
+
+// ─── Product ────────────────────────────────────────────────────────────────
+
+model Product {
+  id    String @id @default(cuid())
+  brand String
+  sku   String @unique
+  name  String
+  color String
+
+  // Derived from SKU structure: PREFIX-COLOR-SIZE
+  skuPrefix String
+  colorCode String
+  sizeCode  String
+
+  quotationItems     QuotationItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([skuPrefix])
+  @@index([name])
+  @@index([sku])
+}
+
+// ─── Quotation ──────────────────────────────────────────────────────────────
+
+model Quotation {
+  id             String @id @default(cuid())
+  organizationId String
+  supplierId     String
+  fileName       String
+  rawData        Json? // Original parsed grid
+  parseMetadata  Json? // Process metadata: stage timings, match stats, validation info
+  notes          String? // User notes from upload
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  supplier     Supplier        @relation(fields: [supplierId], references: [id])
+  items        QuotationItem[]
+  negotiation  Negotiation?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── QuotationItem ──────────────────────────────────────────────────────────
+
+model QuotationItem {
+  id          String @id @default(cuid())
+  quotationId String
+
+  // Raw values from XLSX
+  rawSku         String
+  rawDescription String
+  rawQuantity    String
+  rawUnitPrice   String
+  rawTotalPrice  String?
+  rawNotes       String?
+
+  // Match result
+  productId       String?
+  matchConfidence Float   @default(0)
+  matchMethod     String? // "exact_sku" | "llm_match" | "unmatched"
+
+  // Clean parsed values
+  quantity   Float
+  unitPrice  Float
+  totalPrice Float
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+  product   Product?  @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Negotiation ────────────────────────────────────────────────────────────
+
+model Negotiation {
+  id             String @id @default(cuid())
+  organizationId String
+  quotationId    String @unique
+  userNotes      String?
+  mode           String  @default("balanced") // "cost" | "quality" | "speed" | "cashflow" | "balanced" | "custom"
+  status         String  @default("pending") // "pending" | "negotiating" | "curveball" | "completed"
+  maxRounds      Int     @default(4) // total negotiation rounds budget (initial + post-curveball)
+  curveballDesc  String?
+  curveballData  Json?
+
+  // AI cost tracking
+  totalTokens  Int   @default(0) // total tokens used across all LLM calls
+  totalCostUsd Float @default(0) // estimated USD cost
+
+  organization  Organization       @relation(fields: [organizationId], references: [id])
+  quotation     Quotation          @relation(fields: [quotationId], references: [id])
+  rounds        NegotiationRound[]
+  purchaseOrder PurchaseOrder?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── NegotiationRound ───────────────────────────────────────────────────────
+
+model NegotiationRound {
+  id            String @id @default(cuid())
+  negotiationId String
+  supplierId    String
+  roundNumber   Int
+  phase         String @default("initial") // "initial" | "post_curveball"
+  offerData     Json? // { totalCost, items, leadTime, terms, concessions }
+  status        String @default("in_progress") // "in_progress" | "agreed" | "rejected"
+
+  negotiation Negotiation @relation(fields: [negotiationId], references: [id])
+  supplier    Supplier    @relation(fields: [supplierId], references: [id])
+  messages    Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Message ────────────────────────────────────────────────────────────────
+
+model Message {
+  id      String @id @default(cuid())
+  roundId String
+  role    String // "brand_agent" | "supplier_agent"
+  content String
+  metadata Json?
+
+  round NegotiationRound @relation(fields: [roundId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// ─── PurchaseOrder ──────────────────────────────────────────────────────────
+
+model PurchaseOrder {
+  id             String @id @default(cuid())
+  organizationId String
+  negotiationId  String @unique
+  status         String @default("draft") // "draft" | "confirmed" | "shipped"
+  totalCost      Float
+  reasoning      String // Natural language explanation
+  comparisonData Json? // Scoring matrix data
+
+  organization Organization              @relation(fields: [organizationId], references: [id])
+  negotiation  Negotiation               @relation(fields: [negotiationId], references: [id])
+  allocations  PurchaseOrderAllocation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── PurchaseOrderAllocation ────────────────────────────────────────────────
+
+model PurchaseOrderAllocation {
+  id              String @id @default(cuid())
+  purchaseOrderId String
+  supplierId      String
+  allocationPct   Float // 60, 40, 100
+
+  // Agreed terms
+  agreedCost         Float
+  agreedLeadTimeDays Int
+  agreedPaymentTerms String
+
+  // Cost breakdown (landed cost awareness)
+  fobCost             Float?
+  cashFlowCost        Float?
+  estimatedFreight    Float?
+  estimatedDuty       Float?
+  effectiveLandedCost Float?
+
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
+  supplier      Supplier            @relation(fields: [supplierId], references: [id])
+  items         PurchaseOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── PurchaseOrderItem ──────────────────────────────────────────────────────
+
+model PurchaseOrderItem {
+  id             String @id @default(cuid())
+  allocationId   String
+  productId      String
+  quantity       Int
+  agreedUnitPrice  Float
+  agreedTotalPrice Float
+
+  allocation PurchaseOrderAllocation @relation(fields: [allocationId], references: [id])
+  product    Product                 @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
