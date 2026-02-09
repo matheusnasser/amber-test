@@ -13,7 +13,15 @@ import { authenticateToken } from "./middleware/auth";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors({ origin: "http://localhost:3000" }));
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? `https://${process.env.CORS_ORIGIN}`
+  : "http://localhost:3000";
+app.use(
+  cors({
+    origin: [CORS_ORIGIN, "http://localhost:3000"],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Public routes (no authentication required)

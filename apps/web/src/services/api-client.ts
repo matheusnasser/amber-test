@@ -10,7 +10,9 @@ import type {
 } from "@supplier-negotiation/shared";
 import { apiClient, setToken, removeToken } from "@/lib/axios-client";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+// In production, Next.js rewrites proxy /api/* to the Express API.
+// In dev, the rewrite also handles it, so we always use relative /api.
+const API_BASE = "/api";
 
 // ─── Parse Response Types ────────────────────────────────────────────────────
 

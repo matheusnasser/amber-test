@@ -22,6 +22,11 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 
+# NEXT_PUBLIC_API_URL must be available at build time for Next.js to inline it
+# into the client bundle and for rewrites config.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
 # Copy source code
 COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web

@@ -4,7 +4,9 @@
 
 import axios, { AxiosError, InternalAxiosRequestConfig, AxiosResponse } from "axios";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+// In production, Next.js rewrites proxy /api/* to the Express API.
+// In dev, the rewrite also handles it, so we always use relative /api.
+const API_BASE = "/api";
 const TOKEN_KEY = "amber_auth_token";
 
 // ─── Token Helpers ────────────────────────────────────────────────────────────
