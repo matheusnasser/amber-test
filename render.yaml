@@ -3,8 +3,8 @@ databases:
   # PostgreSQL Database
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   - name: supplier-negotiation-postgres
-    databaseName: postgres
-    user: postgres
+    databaseName: supplierdb
+    user: supplieruser
     plan: starter
     region: oregon
     postgresMajorVersion: "16"
