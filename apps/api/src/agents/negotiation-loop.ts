@@ -31,6 +31,13 @@
  *   supplier_complete (×3) → negotiation_complete
  *
  * Models Used: All agent models (Haiku, Sonnet) - tracks usage across all calls
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Single entry point kicks off the entire multi-supplier negotiation
+ *   • SSE streaming — every pillar, message, and offer appears live, no polling
+ *   • Deduplicates quotation tiers — one SKU = one negotiation line
+ *   • Built-in AI cost tracking — tokens and USD logged per LLM call
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { prisma } from "@supplier-negotiation/database";

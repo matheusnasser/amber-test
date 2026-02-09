@@ -20,6 +20,13 @@
  *
  * Context: Sees FULL history with current supplier, ONLY latest offers from others
  * Models: Claude Haiku (pillars + synthesizer) - fast parallel analysis
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Not one prompt — three specialists (negotiator, risk, cost) working in parallel
+ *   • Synthesizer merges conflicting perspectives into a single coherent voice
+ *   • Full history with current supplier; only structured summaries from competitors
+ *   • LangGraph orchestration — parallel branches, not a sequential chain
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { sonnetSemaphore, trackUsage, withSemaphore } from "../lib/ai";

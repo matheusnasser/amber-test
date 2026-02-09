@@ -1,18 +1,14 @@
+import { apiClient, removeToken, setToken } from "@/lib/axios-client";
 import type {
-  CurveballStrategy,
   CurveballAnalysis,
-  SupplierScore,
-  AllocationItem,
-  SupplierAllocation,
+  FinalDecisionData,
   FinalRecommendation,
   KeyPoint,
-  FinalDecisionData,
+  SupplierAllocation,
+  SupplierScore,
 } from "@supplier-negotiation/shared";
-import { apiClient, setToken, removeToken } from "@/lib/axios-client";
 
-// In production, Next.js rewrites proxy /api/* to the Express API.
-// In dev, the rewrite also handles it, so we always use relative /api.
-const API_BASE = "/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 
 // ─── Parse Response Types ────────────────────────────────────────────────────
 
@@ -132,6 +128,10 @@ export interface OfferData {
   paymentTerms: string;
   concessions: string[];
   conditions: string[];
+  // Persisted context/pillar data (underscore-prefixed to avoid collision with offer fields)
+  _contextSections?: ContextSections | null;
+  _contextSummary?: string | null;
+  _pillarOutputs?: Record<string, string> | null;
 }
 
 export interface NegotiationMessage {
@@ -199,9 +199,28 @@ export interface NegotiationResponse {
 // ─── Context Sections (structured agent input data) ──────────────────────────
 
 export interface ContextSections {
-  quotationItems: { sku: string; description: string; qty: number; unitPrice: number; totalPrice: number }[];
-  supplierProfile: { name: string; code: string; quality: number; priceLevel: string; leadTime: number; terms: string } | null;
-  competitiveIntel: { label: string; totalCost: number; leadTime: number; terms: string; concessions: string[] }[];
+  quotationItems: {
+    sku: string;
+    description: string;
+    qty: number;
+    unitPrice: number;
+    totalPrice: number;
+  }[];
+  supplierProfile: {
+    name: string;
+    code: string;
+    quality: number;
+    priceLevel: string;
+    leadTime: number;
+    terms: string;
+  } | null;
+  competitiveIntel: {
+    label: string;
+    totalCost: number;
+    leadTime: number;
+    terms: string;
+    concessions: string[];
+  }[];
   cashFlowSummary: string;
   riskFlags: string[];
   roundStrategy: string;
@@ -253,12 +272,56 @@ export interface ScoredOffer {
 export type SSEEvent =
   | { type: "connected"; negotiationId: string; status: string }
   | { type: "negotiation_started"; negotiationId: string; timestamp: number }
-  | { type: "supplier_started"; supplierId: string; supplierName: string; supplierCode: string; quality: number; priceLevel: string; leadTime: number; terms: string; isSimulated?: boolean; timestamp: number }
-  | { type: "round_start"; supplierId: string; roundNumber: number; timestamp: number }
-  | { type: "supplier_waiting"; supplierId: string; supplierName: string; supplierCode: string; reason: string; roundNumber: number; timestamp: number }
-  | { type: "context_built"; supplierId: string; roundNumber: number; summary: string; sections: ContextSections; timestamp: number }
-  | { type: "pillar_started"; pillar: string; supplierId: string; roundNumber: number; timestamp: number }
-  | { type: "pillar_complete"; pillar: string; supplierId: string; roundNumber: number; output?: string; timestamp: number }
+  | {
+      type: "supplier_started";
+      supplierId: string;
+      supplierName: string;
+      supplierCode: string;
+      quality: number;
+      priceLevel: string;
+      leadTime: number;
+      terms: string;
+      isSimulated?: boolean;
+      timestamp: number;
+    }
+  | {
+      type: "round_start";
+      supplierId: string;
+      roundNumber: number;
+      timestamp: number;
+    }
+  | {
+      type: "supplier_waiting";
+      supplierId: string;
+      supplierName: string;
+      supplierCode: string;
+      reason: string;
+      roundNumber: number;
+      timestamp: number;
+    }
+  | {
+      type: "context_built";
+      supplierId: string;
+      roundNumber: number;
+      summary: string;
+      sections: ContextSections;
+      timestamp: number;
+    }
+  | {
+      type: "pillar_started";
+      pillar: string;
+      supplierId: string;
+      roundNumber: number;
+      timestamp: number;
+    }
+  | {
+      type: "pillar_complete";
+      pillar: string;
+      supplierId: string;
+      roundNumber: number;
+      output?: string;
+      timestamp: number;
+    }
   | {
       type: "message";
       role: "brand_agent" | "supplier_agent";
@@ -270,16 +333,54 @@ export type SSEEvent =
       messageId: string;
       timestamp: number;
     }
-  | { type: "offer_extracted"; supplierId: string; roundNumber: number; offer: OfferData; timestamp: number }
+  | {
+      type: "offer_extracted";
+      supplierId: string;
+      roundNumber: number;
+      offer: OfferData;
+      timestamp: number;
+    }
   | { type: "offers_snapshot"; offers: ScoredOffer[]; timestamp: number }
-  | { type: "round_analysis"; roundNumber: number; summary: string; supplierScores: RoundSupplierScore[]; timestamp: number }
-  | { type: "round_end"; supplierId: string; roundNumber: number; timestamp: number }
-  | { type: "curveball_detected"; supplierId: string; roundNumber: number; description: string; timestamp: number }
-  | { type: "curveball_analysis"; analysis: CurveballAnalysis; timestamp: number }
+  | {
+      type: "round_analysis";
+      roundNumber: number;
+      summary: string;
+      supplierScores: RoundSupplierScore[];
+      timestamp: number;
+    }
+  | {
+      type: "round_end";
+      supplierId: string;
+      roundNumber: number;
+      timestamp: number;
+    }
+  | {
+      type: "curveball_detected";
+      supplierId: string;
+      roundNumber: number;
+      description: string;
+      timestamp: number;
+    }
+  | {
+      type: "curveball_analysis";
+      analysis: CurveballAnalysis;
+      timestamp: number;
+    }
   | { type: "supplier_complete"; supplierId: string; timestamp: number }
   | { type: "negotiation_complete"; negotiationId: string; timestamp: number }
   | { type: "generating_decision"; negotiationId: string; timestamp: number }
-  | { type: "decision"; recommendation: FinalRecommendation; comparison: SupplierScore[]; summary: string; keyPoints: KeyPoint[]; reasoning: string; tradeoffs: string; purchaseOrderId: string; allSupplierAllocations?: SupplierAllocation[]; timestamp: number }
+  | {
+      type: "decision";
+      recommendation: FinalRecommendation;
+      comparison: SupplierScore[];
+      summary: string;
+      keyPoints: KeyPoint[];
+      reasoning: string;
+      tradeoffs: string;
+      purchaseOrderId: string;
+      allSupplierAllocations?: SupplierAllocation[];
+      timestamp: number;
+    }
   | { type: "error"; message: string; timestamp: number };
 
 // ─── API Functions ───────────────────────────────────────────────────────────
@@ -291,7 +392,10 @@ function getToken(): string | null {
   return localStorage.getItem("amber_auth_token");
 }
 
-export async function parseQuotation(file: File, notes?: string): Promise<ParseResponse> {
+export async function parseQuotation(
+  file: File,
+  notes?: string,
+): Promise<ParseResponse> {
   const formData = new FormData();
   formData.append("file", file);
   if (notes) formData.append("notes", notes);
@@ -305,7 +409,9 @@ export async function parseQuotation(file: File, notes?: string): Promise<ParseR
 
 // ─── Load stored parse result by quotationId ─────────────────────────────────
 
-export async function getQuotation(quotationId: string): Promise<ParseResponse> {
+export async function getQuotation(
+  quotationId: string,
+): Promise<ParseResponse> {
   const response = await apiClient.get<ParseResponse>(`/parse/${quotationId}`);
   return response.data;
 }
@@ -325,7 +431,10 @@ export async function createSupplierForQuotation(
   quotationId: string,
   name: string,
 ): Promise<SupplierProfile> {
-  const response = await apiClient.post<SupplierProfile>(`/parse/${quotationId}/create-supplier`, { name });
+  const response = await apiClient.post<SupplierProfile>(
+    `/parse/${quotationId}/create-supplier`,
+    { name },
+  );
   return response.data;
 }
 
@@ -333,7 +442,10 @@ export async function updateQuotationSupplier(
   quotationId: string,
   supplierId: string,
 ): Promise<{ ok: boolean; supplier: SupplierProfile }> {
-  const response = await apiClient.put<{ ok: boolean; supplier: SupplierProfile }>(`/parse/${quotationId}/supplier`, { supplierId });
+  const response = await apiClient.put<{
+    ok: boolean;
+    supplier: SupplierProfile;
+  }>(`/parse/${quotationId}/supplier`, { supplierId });
   return response.data;
 }
 
@@ -342,7 +454,12 @@ export async function updateQuotationSupplier(
 export async function startNegotiation(
   quotationId: string,
   onEvent: (event: SSEEvent) => void,
-  options?: { userNotes?: string; mode?: string; maxRounds?: number; signal?: AbortSignal },
+  options?: {
+    userNotes?: string;
+    mode?: string;
+    maxRounds?: number;
+    signal?: AbortSignal;
+  },
 ): Promise<void> {
   const token = getToken();
   const headers: HeadersInit = { "Content-Type": "application/json" };
@@ -405,7 +522,12 @@ export async function startReQuote(
   supplierIds: string[],
   qtyChanges: Record<string, { from: number; to: number }>,
   onEvent: (event: SSEEvent) => void,
-  options?: { userNotes?: string; mode?: string; maxRounds?: number; signal?: AbortSignal },
+  options?: {
+    userNotes?: string;
+    mode?: string;
+    maxRounds?: number;
+    signal?: AbortSignal;
+  },
 ): Promise<void> {
   const token = getToken();
   const headers: HeadersInit = { "Content-Type": "application/json" };
@@ -512,8 +634,12 @@ export function subscribeToNegotiation(
 
 // ─── Load negotiation state from DB ──────────────────────────────────────────
 
-export async function getNegotiation(negotiationId: string): Promise<NegotiationResponse> {
-  const response = await apiClient.get<NegotiationResponse>(`/negotiate/${negotiationId}`);
+export async function getNegotiation(
+  negotiationId: string,
+): Promise<NegotiationResponse> {
+  const response = await apiClient.get<NegotiationResponse>(
+    `/negotiate/${negotiationId}`,
+  );
   return response.data;
 }
 
@@ -530,9 +656,13 @@ export async function getNegotiationByQuotation(
   }
 }
 
-export async function getDecision(negotiationId: string): Promise<FinalDecisionData | null> {
+export async function getDecision(
+  negotiationId: string,
+): Promise<FinalDecisionData | null> {
   try {
-    const response = await apiClient.get<FinalDecisionData>(`/negotiate/${negotiationId}/decision`);
+    const response = await apiClient.get<FinalDecisionData>(
+      `/negotiate/${negotiationId}/decision`,
+    );
     return response.data;
   } catch {
     return null;
@@ -543,20 +673,25 @@ export async function getDecision(negotiationId: string): Promise<FinalDecisionD
 // Import from shared package to avoid duplication
 
 export type {
-  CurveballStrategy,
-  CurveballAnalysis,
-  SupplierScore,
   AllocationItem,
-  SupplierAllocation,
+  CurveballAnalysis,
+  CurveballStrategy,
+  FinalDecisionData,
   FinalRecommendation,
   KeyPoint,
-  FinalDecisionData,
+  SupplierAllocation,
+  SupplierScore,
 } from "@supplier-negotiation/shared";
 
 export type CurveballSSEEvent =
   | { type: "curveball_injected"; description: string }
   | { type: "strategy_proposed"; analysis: CurveballAnalysis }
-  | { type: "supplier_started"; supplierId: string; supplierName: string; supplierCode: string }
+  | {
+      type: "supplier_started";
+      supplierId: string;
+      supplierName: string;
+      supplierCode: string;
+    }
   | { type: "round_start"; supplierId: string; roundNumber: number }
   | {
       type: "message";
@@ -567,7 +702,12 @@ export type CurveballSSEEvent =
       roundNumber: number;
       messageId: string;
     }
-  | { type: "offer_extracted"; supplierId: string; roundNumber: number; offer: OfferData }
+  | {
+      type: "offer_extracted";
+      supplierId: string;
+      roundNumber: number;
+      offer: OfferData;
+    }
   | { type: "round_end"; supplierId: string; roundNumber: number }
   | { type: "supplier_complete"; supplierId: string }
   | {
@@ -642,10 +782,10 @@ export async function startCurveball(
 export async function confirmPurchaseOrder(
   purchaseOrderId: string,
 ): Promise<{ purchaseOrderId: string; status: string }> {
-  const response = await apiClient.post<{ purchaseOrderId: string; status: string }>(
-    `/purchase-orders/${purchaseOrderId}/confirm`,
-    { confirmed: true },
-  );
+  const response = await apiClient.post<{
+    purchaseOrderId: string;
+    status: string;
+  }>(`/purchase-orders/${purchaseOrderId}/confirm`, { confirmed: true });
   return response.data;
 }
 
@@ -655,10 +795,11 @@ export async function login(
   email: string,
   password: string,
 ): Promise<{ token: string; user: { email: string } }> {
-  const response = await apiClient.post<{ token: string; user: { email: string }; expiresIn: string }>(
-    "/auth/login",
-    { email, password }
-  );
+  const response = await apiClient.post<{
+    token: string;
+    user: { email: string };
+    expiresIn: string;
+  }>("/auth/login", { email, password });
 
   setToken(response.data.token);
   return { token: response.data.token, user: response.data.user };
@@ -677,7 +818,9 @@ export function isAuthenticated(): boolean {
 
 export async function getCurrentUser(): Promise<{ email: string } | null> {
   try {
-    const response = await apiClient.get<{ user: { email: string } }>("/auth/me");
+    const response = await apiClient.get<{ user: { email: string } }>(
+      "/auth/me",
+    );
     return response.data.user;
   } catch (error) {
     return null;

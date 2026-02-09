@@ -29,6 +29,13 @@
  *   - Convergence: Auto-eliminates non-competitive suppliers mid-loop
  *
  * State Tracking: Offers Map, Conversation Histories, Round Numbers, Phase
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Outer orchestrator — 3 supplier negotiations running simultaneously
+ *   • Round 1 staged: quote S2/S3 first, then leverage their offers against S1
+ *   • Cross-pollination: each supplier sees competing offers as competitive pressure
+ *   • Real-time SSE streaming — pillars, messages, offers appear live in the UI
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
@@ -230,6 +237,11 @@ async function negotiateRoundNode(
     const roundStartTime = Date.now();
     const isXlsxSource = profile.code === state.quotationSupplierCode;
 
+    // Capture context/pillar data for persistence alongside offerData
+    let capturedContextSections: ContextSections | undefined;
+    let capturedContextSummary: string | undefined;
+    const capturedPillarOutputs: Record<string, string> = {};
+
     state.onEvent({
       type: "round_start",
       supplierId: profile.id,
@@ -295,6 +307,8 @@ async function negotiateRoundNode(
         totalRounds: maxRounds,
         isXlsxSource: true,
         onContextBuilt: (summary: string, sections: ContextSections) => {
+          capturedContextSummary = summary;
+          capturedContextSections = sections;
           state.onEvent({
             type: "context_built",
             supplierId: profile.id,
@@ -305,6 +319,9 @@ async function negotiateRoundNode(
           });
         },
         onPillarEvent: (pillarEvent: PillarEvent) => {
+          if (pillarEvent.type === "pillar_complete" && pillarEvent.output) {
+            capturedPillarOutputs[pillarEvent.pillar] = pillarEvent.output;
+          }
           state.onEvent({
             type: pillarEvent.type,
             pillar: pillarEvent.pillar,
@@ -406,7 +423,12 @@ async function negotiateRoundNode(
       await prisma.negotiationRound.update({
         where: { id: round.id },
         data: {
-          offerData: JSON.parse(JSON.stringify(baselineOffer)),
+          offerData: JSON.parse(JSON.stringify({
+            ...baselineOffer,
+            _contextSections: capturedContextSections ?? null,
+            _contextSummary: capturedContextSummary ?? null,
+            _pillarOutputs: Object.keys(capturedPillarOutputs).length > 0 ? capturedPillarOutputs : null,
+          })),
           status: "completed",
         },
       });
@@ -475,6 +497,8 @@ async function negotiateRoundNode(
       onContextBuilt: skipPillars
         ? undefined
         : (summary: string, sections: ContextSections) => {
+            capturedContextSummary = summary;
+            capturedContextSections = sections;
             state.onEvent({
               type: "context_built",
               supplierId: profile.id,
@@ -487,6 +511,9 @@ async function negotiateRoundNode(
       onPillarEvent: skipPillars
         ? undefined
         : (pillarEvent: PillarEvent) => {
+            if (pillarEvent.type === "pillar_complete" && pillarEvent.output) {
+              capturedPillarOutputs[pillarEvent.pillar] = pillarEvent.output;
+            }
             state.onEvent({
               type: pillarEvent.type,
               pillar: pillarEvent.pillar,
@@ -544,6 +571,8 @@ async function negotiateRoundNode(
       updatedHistory,
       curveball,
       isQuoteRequest,
+      roundNumber,
+      state.allOffers[profile.id] ?? null,
     );
 
     const supplierMessageContent = await createSupplierResponse(
@@ -588,7 +617,12 @@ async function negotiateRoundNode(
     await prisma.negotiationRound.update({
       where: { id: round.id },
       data: {
-        offerData: JSON.parse(JSON.stringify(offer)),
+        offerData: JSON.parse(JSON.stringify({
+          ...offer,
+          _contextSections: capturedContextSections ?? null,
+          _contextSummary: capturedContextSummary ?? null,
+          _pillarOutputs: Object.keys(capturedPillarOutputs).length > 0 ? capturedPillarOutputs : null,
+        })),
         status: "completed",
       },
     });

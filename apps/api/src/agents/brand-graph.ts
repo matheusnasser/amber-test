@@ -27,6 +27,13 @@
  *
  * Benefits: 70% token reduction (compact pillar contexts), specialized reasoning
  * Models: Claude Haiku (pillars + synthesizer) - fast, parallel-safe, avoids rate limits
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Graph inside a graph — outer orchestrates suppliers, inner orchestrates thinking
+ *   • Three pillars run in parallel: ~6s wall-clock instead of ~18s sequential
+ *   • Each pillar gets tailored compact context — 70% fewer tokens than a single blob
+ *   • Synthesizer resolves inter-pillar conflicts into one message as "Alex"
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";

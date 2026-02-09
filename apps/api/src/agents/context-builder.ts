@@ -22,6 +22,13 @@
  *   5. buildCashFlowAnalysis() → Payment terms cost analysis
  *
  * Result: ~7-9K tokens per turn instead of 20-30K (massive savings)
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Current supplier: full conversation. Competitors: 200-token offer summaries
+ *   • Drops token usage from ~25K to ~8K per turn — 70% reduction
+ *   • Each pillar gets a different context slice — tailored, not one-size-fits-all
+ *   • Includes cash flow analysis, quality comparison, risk flags per supplier
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { formatSkuRef } from "./format-helpers";

@@ -26,6 +26,14 @@
  *
  * Model: Claude Haiku via Vercel AI SDK generateObject() (Zod validation built-in)
  * Called after: Every supplier response
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Bridges natural language → structured data (per-SKU prices, terms, concessions)
+ *   • Deterministic totalCost: SUM(unitPrice x quantity) — never trust LLM arithmetic
+ *   • Force-normalizes quantities to baseline — apples-to-apples supplier comparison
+ *   • Blanket price detection — catches "$165/unit for all 20 products" and fixes it
+ *   • Per-item outlier correction — snaps nonsensical prices back to baseline
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { generateObject } from "ai";
@@ -33,7 +41,6 @@ import { z } from "zod";
 import { extractorModel, getCostTracker } from "../lib/ai";
 import { formatSkuRef } from "./format-helpers";
 import type { OfferData, QuotationItemData, SupplierProfile } from "./types";
-import { computePriceRange } from "./utils/calculations";
 import { formatCurrency } from "./utils/formatting";
 
 const volumeTierSchema = z.object({
@@ -119,6 +126,8 @@ Extract the structured offer from the supplier message above. Follow these rules
    - totalCost must NEVER be 0. If pricing is unclear, estimate from baseline with stated discount.
 
 2. ITEMS: Extract per-item unit prices. ALWAYS use BASELINE quantities (Qty column) for every item — this is non-negotiable for apples-to-apples comparison. If the supplier proposes different quantities, still use baseline quantities and extract their unit price at those quantities.
+   - CRITICAL: If the supplier quotes a SINGLE blanket price (e.g., "$165/unit" for all items), do NOT apply that price to every SKU. Instead, interpret it as a percentage adjustment from the baseline. Calculate the ratio: stated_total / baseline_total, then apply that ratio to each item's baseline unit price. Each item has different baseline prices — a blanket price makes no sense across different product categories.
+   - Example: If baseline total is $87,150 and supplier says "$80,000 total", ratio = 0.918. Apply: each item's unitPrice = baseline_unitPrice × 0.918.
 
 3. LEAD TIME & PAYMENT TERMS: Use the supplier's stated values. Fall back to defaults if not mentioned.
 
@@ -212,6 +221,111 @@ export async function extractOffer(
     }
   }
 
+  // ── Force-normalize quantities to baseline ──
+  // The LLM sometimes extracts wrong quantities (e.g., 5000 instead of 500).
+  // Every supplier MUST be compared on the same baseline quantities.
+  const baselineQtyMap = new Map(
+    quotationItems.map((qi) => [qi.rawSku.toUpperCase().trim(), qi.quantity]),
+  );
+  for (const item of object.items) {
+    const baselineQty = baselineQtyMap.get(item.sku.toUpperCase().trim());
+    if (baselineQty && item.quantity !== baselineQty) {
+      console.log(
+        `offer-extractor: Normalizing ${item.sku} qty ${item.quantity} → ${baselineQty} for ${supplierProfile.name}`,
+      );
+      item.quantity = baselineQty;
+    }
+  }
+
+  // ── Price sanity: detect and fix nonsensical per-item prices ──
+  // The LLM can produce garbage prices in several ways:
+  //   A) Blanket price — "$165/unit" applied to all 20 different SKUs
+  //   B) Wrong magnitude — confusing total with unit price, or qty tier mixup
+  //   C) Hallucinated prices — completely fabricated numbers
+  // Strategy: compare each extracted price against its baseline. If the ratio is
+  // extreme (>3x or <0.2x), it's wrong. Fix individually or globally.
+  if (quotationItems.length > 0 && object.items.length > 0) {
+    const baselineMap = new Map(
+      quotationItems.map((qi) => [
+        qi.rawSku.toUpperCase().trim(),
+        { unitPrice: qi.unitPrice, totalPrice: qi.totalPrice, quantity: qi.quantity },
+      ]),
+    );
+    const baselineTotal = quotationItems.reduce((s, qi) => s + qi.totalPrice, 0);
+
+    // Step 1: Detect blanket pricing (most items share the same extracted price)
+    const priceCounts = new Map<string, number>();
+    for (const item of object.items) {
+      const key = item.unitPrice.toFixed(2);
+      priceCounts.set(key, (priceCounts.get(key) ?? 0) + 1);
+    }
+    const mostCommonCount = Math.max(...priceCounts.values());
+    const isBlanket =
+      object.items.length > 3 &&
+      mostCommonCount >= object.items.length * 0.7; // 70%+ items share same price
+
+    if (isBlanket) {
+      // Find the dominant price
+      let dominantPrice = 0;
+      for (const [price, count] of priceCounts) {
+        if (count === mostCommonCount) {
+          dominantPrice = parseFloat(price);
+          break;
+        }
+      }
+
+      // Check if this dominant price is plausible — does it match most baselines?
+      let matchesBaseline = 0;
+      for (const qi of quotationItems) {
+        if (Math.abs(qi.unitPrice - dominantPrice) / qi.unitPrice < 0.3) {
+          matchesBaseline++;
+        }
+      }
+
+      // If it doesn't match baselines, it's a blanket quote → proportional adjustment
+      if (matchesBaseline < quotationItems.length * 0.3) {
+        // Use the LLM's stated total to compute the intended ratio
+        const ratio = baselineTotal > 0 && object.totalCost > 0
+          ? Math.max(0.5, Math.min(2.0, object.totalCost / baselineTotal))
+          : 1;
+
+        console.log(
+          `offer-extractor: Blanket price detected ($${dominantPrice}/unit on ${mostCommonCount}/${object.items.length} items) for ${supplierProfile.name}. Applying proportional adjustment (${(ratio * 100).toFixed(1)}% of baseline).`,
+        );
+
+        for (const item of object.items) {
+          const bl = baselineMap.get(item.sku.toUpperCase().trim());
+          if (bl) {
+            item.unitPrice = Math.round(bl.unitPrice * ratio * 100) / 100;
+          }
+        }
+      }
+    }
+
+    // Step 2: Per-item outlier correction (catches individual bad extractions)
+    // Any item whose price ratio vs baseline is extreme gets snapped back.
+    let outliersCorrected = 0;
+    for (const item of object.items) {
+      const bl = baselineMap.get(item.sku.toUpperCase().trim());
+      if (!bl || bl.unitPrice === 0) continue;
+
+      const ratio = item.unitPrice / bl.unitPrice;
+      if (ratio > 3.0 || ratio < 0.2) {
+        // This price is nonsensical — snap to baseline (the supplier didn't mention this SKU specifically)
+        console.log(
+          `offer-extractor: Outlier price for ${item.sku}: $${item.unitPrice.toFixed(2)} is ${ratio.toFixed(1)}x baseline $${bl.unitPrice.toFixed(2)}. Snapping to baseline for ${supplierProfile.name}.`,
+        );
+        item.unitPrice = bl.unitPrice;
+        outliersCorrected++;
+      }
+    }
+    if (outliersCorrected > 0) {
+      console.log(
+        `offer-extractor: Corrected ${outliersCorrected} outlier price(s) for ${supplierProfile.name}`,
+      );
+    }
+  }
+
   // ── Deterministic totalCost: never trust the LLM's arithmetic ──
   // If we have items with valid sku + qty + unitPrice, compute ourselves.
   const validItems = object.items.filter(
@@ -238,50 +352,13 @@ export async function extractOffer(
     );
   }
 
-  // ── Validate against supplier price range ──
-  const priceRange = computePriceRange(supplierProfile);
+  // ── Log price vs baseline for diagnostics (no clipping — trust extracted per-item prices) ──
   const baselineTotal = quotationItems.reduce((sum, item) => sum + item.totalPrice, 0);
-  const minCost = baselineTotal * priceRange.low;
-  const maxCost = baselineTotal * priceRange.high;
-
-  // Clip total cost if outside range (with warning)
-  if (object.totalCost < minCost || object.totalCost > maxCost) {
-    console.warn(
-      `offer-extractor: Supplier ${supplierProfile.name} quoted ${formatCurrency(object.totalCost)} outside allowed range [${formatCurrency(minCost)}, ${formatCurrency(maxCost)}]. Clipping to range.`
+  if (baselineTotal > 0) {
+    const ratio = object.totalCost / baselineTotal;
+    console.log(
+      `offer-extractor: ${supplierProfile.name} total ${formatCurrency(object.totalCost)} = ${(ratio * 100).toFixed(1)}% of baseline ${formatCurrency(baselineTotal)}`,
     );
-    object.totalCost = Math.max(minCost, Math.min(maxCost, object.totalCost));
-
-    // Proportionally adjust item prices to match clipped total
-    const currentItemsTotal = object.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    if (currentItemsTotal > 0) {
-      const adjustmentFactor = object.totalCost / currentItemsTotal;
-      object.items = object.items.map(item => ({
-        ...item,
-        unitPrice: item.unitPrice * adjustmentFactor,
-      }));
-    }
-  }
-
-  // ── Detect per-item outliers (log warnings, don't clip) ──
-  for (const item of object.items) {
-    const baselineItem = quotationItems.find(
-      q => q.rawSku?.toUpperCase() === item.sku.toUpperCase()
-    );
-
-    if (!baselineItem) {
-      console.warn(`offer-extractor: Item ${item.sku} not found in baseline, may be hallucinated`);
-      continue;
-    }
-
-    const itemPriceRatio = item.unitPrice / baselineItem.unitPrice;
-    const itemMinRatio = priceRange.low * 0.85; // Allow 15% slack for item-level variance
-    const itemMaxRatio = priceRange.high * 1.15;
-
-    if (itemPriceRatio < itemMinRatio || itemPriceRatio > itemMaxRatio) {
-      console.warn(
-        `offer-extractor: Item ${item.sku} priced at ${itemPriceRatio.toFixed(2)}x baseline (outside ${itemMinRatio.toFixed(2)}-${itemMaxRatio.toFixed(2)}x range)`
-      );
-    }
   }
 
   // Backfill missing items from baseline quotation so downstream always has full SKU coverage

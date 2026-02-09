@@ -2,11 +2,13 @@
  * Axios client with authentication interceptors
  */
 
-import axios, { AxiosError, InternalAxiosRequestConfig, AxiosResponse } from "axios";
+import axios, {
+  AxiosError,
+  AxiosResponse,
+  InternalAxiosRequestConfig,
+} from "axios";
 
-// In production, Next.js rewrites proxy /api/* to the Express API.
-// In dev, the rewrite also handles it, so we always use relative /api.
-const API_BASE = "/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 const TOKEN_KEY = "amber_auth_token";
 
 // ─── Token Helpers ────────────────────────────────────────────────────────────
@@ -48,7 +50,7 @@ apiClient.interceptors.request.use(
   },
   (error) => {
     return Promise.reject(error);
-  }
+  },
 );
 
 // ─── Response Interceptor: Auto-Logout on 401/403 ────────────────────────────
@@ -61,7 +63,10 @@ apiClient.interceptors.response.use(
     // Auto-logout on authentication errors
     if (error.response?.status === 401 || error.response?.status === 403) {
       removeToken();
-      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      if (
+        typeof window !== "undefined" &&
+        window.location.pathname !== "/login"
+      ) {
         window.location.href = "/login";
       }
     }
@@ -73,5 +78,5 @@ apiClient.interceptors.response.use(
       "API request failed";
 
     return Promise.reject(new Error(message));
-  }
+  },
 );

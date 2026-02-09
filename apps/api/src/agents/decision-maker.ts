@@ -37,6 +37,14 @@
  *   Balanced:       30% cost, 25% quality, 25% lead, 20% terms
  *
  * Model: Claude Sonnet 4.5 via Vercel AI SDK generateObject() (complex reasoning + Zod validation)
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Handles curveball disruptions — generates 2-3 alternative strategies in real-time
+ *   • Multi-dimensional scoring: cost, quality, lead time, payment terms
+ *   • User's priority mode shifts scoring weights (cost-first, quality-first, etc.)
+ *   • Creates draft Purchase Order with per-SKU allocations and landed cost fields
+ *   • Automation prepares; humans approve — POs always start as "draft"
+ * ────────────────────────────────────────────────────────────────
  */
 
 import { prisma } from "@supplier-negotiation/database";
@@ -229,14 +237,22 @@ export async function generateFinalDecision(
 
   const weights = getScoringWeights(negotiation.mode);
 
-  // Build baseline items for per-item comparison
-  const baselineItems = negotiation.quotation.items.map((i) => ({
-    rawSku: i.rawSku,
-    rawDescription: i.rawDescription,
-    quantity: i.quantity,
-    unitPrice: i.unitPrice,
-    totalPrice: i.quantity * i.unitPrice,
-  }));
+  // Build baseline items for per-item comparison (deduplicated — smallest qty tier per SKU)
+  const baselineItemsBySku = new Map<string, { rawSku: string; rawDescription: string; quantity: number; unitPrice: number; totalPrice: number }>();
+  for (const i of negotiation.quotation.items) {
+    const key = i.rawSku.toUpperCase().trim();
+    const existing = baselineItemsBySku.get(key);
+    if (!existing || i.quantity < existing.quantity) {
+      baselineItemsBySku.set(key, {
+        rawSku: i.rawSku,
+        rawDescription: i.rawDescription,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        totalPrice: i.quantity * i.unitPrice,
+      });
+    }
+  }
+  const baselineItems = Array.from(baselineItemsBySku.values());
   const totalBaselineUnits = baselineItems.reduce((s, i) => s + i.quantity, 0);
   const baselineTotal = baselineItems.reduce((s, i) => s + i.totalPrice, 0);
 
@@ -394,9 +410,19 @@ Evaluate all suppliers and produce a final decision. You MUST include ALL of the
   }
 
   // Create PurchaseOrder with allocations and items (idempotent — skip if already exists)
-  const matchedItems = negotiation.quotation.items.filter(
+  // Deduplicate items by SKU — keep smallest-qty tier (matches negotiation baseline)
+  const allMatchedItems = negotiation.quotation.items.filter(
     (i) => i.productId != null,
   );
+  const matchedItemsBySku = new Map<string, typeof allMatchedItems[0]>();
+  for (const item of allMatchedItems) {
+    const key = item.rawSku.toUpperCase().trim();
+    const existing = matchedItemsBySku.get(key);
+    if (!existing || item.quantity < existing.quantity) {
+      matchedItemsBySku.set(key, item);
+    }
+  }
+  const matchedItems = Array.from(matchedItemsBySku.values());
 
   let existingPO = await prisma.purchaseOrder.findUnique({
     where: { negotiationId },

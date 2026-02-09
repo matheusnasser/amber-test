@@ -41,6 +41,8 @@ interface NodeDetail {
   contextSummary?: string;
   contextSections?: ContextSections;
   pillarInsights?: Record<string, string>;
+  /** Per-supplier pillar summaries for the decision panel: { supplierId: { pillarKey: output } } */
+  supplierPillarInsights?: Record<string, Record<string, string>>;
   strategy?: CurveballStrategy;
   scoredOffers?: ScoredOffer[];
   decisionData?: FinalDecisionData;
@@ -548,11 +550,14 @@ function buildGraph(
       const isActive = liveState?.activeRounds.has(`${supplier.supplierId}-${round.roundNumber}`) ?? false;
 
       const ctxKey = `${supplier.supplierId}-${round.roundNumber}`;
-      const contextSummary = liveState?.contextSummaries.get(ctxKey);
+      const contextSummary = liveState?.contextSummaries.get(ctxKey)
+        ?? round.offerData?._contextSummary
+        ?? undefined;
       const pillarKeys = ["negotiator", "riskAnalyst", "productCost"];
       const pillarInsights: string[] = [];
       for (const pk of pillarKeys) {
-        const output = liveState?.pillarOutputs.get(`${ctxKey}-${pk}`);
+        const output = liveState?.pillarOutputs.get(`${ctxKey}-${pk}`)
+          ?? round.offerData?._pillarOutputs?.[pk];
         if (output) pillarInsights.push(trunc(output, 40));
       }
 
@@ -819,7 +824,7 @@ function DetailPanel({ detail, onClose }: { detail: NodeDetail; onClose: () => v
                 const colors: Record<string, string> = { negotiator: "bg-blue-50 border-blue-200", riskAnalyst: "bg-amber-50 border-amber-200", productCost: "bg-green-50 border-green-200" };
                 const labels: Record<string, string> = { negotiator: "Negotiator", riskAnalyst: "Risk Analyst", productCost: "Product/Cost" };
                 return (
-                  <details key={pillar} className={`border rounded px-3 py-2 ${colors[pillar] ?? "bg-gray-50 border-gray-200"}`}>
+                  <details key={pillar} open className={`border rounded px-3 py-2 ${colors[pillar] ?? "bg-gray-50 border-gray-200"}`}>
                     <summary className="text-[8px] font-semibold uppercase cursor-pointer hover:opacity-80">{labels[pillar] ?? pillar}</summary>
                     <SimpleMarkdown text={insight} className="mt-1" />
                   </details>
@@ -1128,6 +1133,38 @@ function DetailPanel({ detail, onClose }: { detail: NodeDetail; onClose: () => v
               </div>
             )}
 
+            {/* Per-Supplier Pillar Insights */}
+            {detail.supplierPillarInsights && Object.keys(detail.supplierPillarInsights).length > 0 && (
+              <div>
+                <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Pillar Analysis (Latest Round)</p>
+                <div className="space-y-2">
+                  {detail.negotiation?.suppliers.map((supplier) => {
+                    const insights = detail.supplierPillarInsights?.[supplier.supplierId];
+                    if (!insights || Object.keys(insights).length === 0) return null;
+                    const pillarColors: Record<string, string> = { negotiator: "bg-blue-50 border-blue-200 text-blue-800", riskAnalyst: "bg-amber-50 border-amber-200 text-amber-800", productCost: "bg-green-50 border-green-200 text-green-800" };
+                    const pillarLabels: Record<string, string> = { negotiator: "Negotiator", riskAnalyst: "Risk Analyst", productCost: "Product/Cost" };
+                    return (
+                      <details key={supplier.supplierId} className="border border-gray-200 rounded-lg overflow-hidden">
+                        <summary className="text-[9px] font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 px-3 py-1.5 flex items-center gap-2">
+                          <span>{supplier.supplierName}</span>
+                          <span className="text-[8px] text-gray-400 font-mono">{supplier.supplierCode}</span>
+                          <span className="text-[8px] text-gray-400 font-normal">{Object.keys(insights).length} pillars</span>
+                        </summary>
+                        <div className="px-3 py-2 space-y-1.5 bg-gray-50/50">
+                          {Object.entries(insights).map(([pillar, output]) => (
+                            <div key={pillar} className={`border rounded px-2.5 py-1.5 ${pillarColors[pillar] ?? "bg-gray-50 border-gray-200 text-gray-800"}`}>
+                              <p className="text-[8px] font-bold uppercase mb-0.5">{pillarLabels[pillar] ?? pillar}</p>
+                              <SimpleMarkdown text={output} className="text-[9px]" />
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Supplier Comparison — with quality info */}
             {dd.comparison.length > 0 && (
               <div>
@@ -1384,14 +1421,31 @@ export function OrchestrationFlow({ negotiation, activePillars, isLive, liveEven
       const ctxKey = round ? `${supplier?.supplierId}-${round.roundNumber}` : "";
 
       // Gather pillar insights and structured context for this round
+      // Priority: live SSE state > persisted offerData._* fields
       const pillarInsights: Record<string, string> = {};
       let contextSections: ContextSections | undefined;
+      let contextSummary: string | undefined;
+
       if (liveState) {
         for (const pk of ["negotiator", "riskAnalyst", "productCost"]) {
           const output = liveState.pillarOutputs.get(`${ctxKey}-${pk}`);
           if (output) pillarInsights[pk] = output;
         }
         contextSections = liveState.contextData.get(ctxKey);
+        contextSummary = liveState.contextSummaries.get(ctxKey);
+      }
+
+      // Fallback to persisted data from offerData JSON
+      if (!contextSections && round?.offerData?._contextSections) {
+        contextSections = round.offerData._contextSections;
+      }
+      if (!contextSummary && round?.offerData?._contextSummary) {
+        contextSummary = round.offerData._contextSummary;
+      }
+      if (Object.keys(pillarInsights).length === 0 && round?.offerData?._pillarOutputs) {
+        for (const [pk, output] of Object.entries(round.offerData._pillarOutputs)) {
+          pillarInsights[pk] = output;
+        }
       }
 
       if (round) {
@@ -1406,7 +1460,7 @@ export function OrchestrationFlow({ negotiation, activePillars, isLive, liveEven
           subtitle: supplier?.supplierName,
           round, supplierName: supplier?.supplierName,
           prevOffer: prevRoundOffer,
-          contextSummary: liveState?.contextSummaries.get(ctxKey),
+          contextSummary,
           contextSections,
           pillarInsights: Object.keys(pillarInsights).length > 0 ? pillarInsights : undefined,
           scoredOffers: liveState?.scoredOffers,
@@ -1463,12 +1517,41 @@ export function OrchestrationFlow({ negotiation, activePillars, isLive, liveEven
     }
 
     if (node.id === "decision") {
+      // Extract latest pillar outputs per supplier from round offerData
+      const supplierPillarInsights: Record<string, Record<string, string>> = {};
+      for (const supplier of negotiation.suppliers) {
+        // Walk rounds in reverse to find the latest pillar data
+        for (let ri = supplier.rounds.length - 1; ri >= 0; ri--) {
+          const pillars = supplier.rounds[ri].offerData?._pillarOutputs;
+          if (pillars && Object.keys(pillars).length > 0) {
+            supplierPillarInsights[supplier.supplierId] = pillars;
+            break;
+          }
+        }
+        // Fallback to liveState if no persisted data
+        if (!supplierPillarInsights[supplier.supplierId] && liveState) {
+          const lastRound = supplier.rounds[supplier.rounds.length - 1];
+          if (lastRound) {
+            const ctxKey = `${supplier.supplierId}-${lastRound.roundNumber}`;
+            const insights: Record<string, string> = {};
+            for (const pk of ["negotiator", "riskAnalyst", "productCost"]) {
+              const output = liveState.pillarOutputs.get(`${ctxKey}-${pk}`);
+              if (output) insights[pk] = output;
+            }
+            if (Object.keys(insights).length > 0) {
+              supplierPillarInsights[supplier.supplierId] = insights;
+            }
+          }
+        }
+      }
+
       // Show loading state immediately, then fetch decision data
       setSelectedDetail({
         id: "decision", type: "decision", title: "Final Decision",
         subtitle: negotiation.status === "completed" ? "Completed" : "Pending...",
         metadata: { Status: negotiation.status },
         supplierParams: liveState?.supplierParams,
+        supplierPillarInsights,
         userNotes: negotiation.userNotes,
         mode: negotiation.mode,
         negotiation,
@@ -1481,6 +1564,7 @@ export function OrchestrationFlow({ negotiation, activePillars, isLive, liveEven
               subtitle: decision.summary,
               decisionData: decision,
               supplierParams: liveState?.supplierParams,
+              supplierPillarInsights,
               userNotes: negotiation.userNotes,
               mode: negotiation.mode,
               negotiation,

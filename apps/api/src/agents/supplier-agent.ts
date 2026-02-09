@@ -6,12 +6,12 @@
  *   Personality: Direct, no-nonsense, thin margins, volume-focused
  *   Strategy: Push back before conceding, 2-3% at a time, defend quality
  *
- * SUP-002 "Alpine Premium" (simulated):
+ * SUP-002 "" (simulated):
  *   Quality: 4.7/5 | Price: Expensive | Lead: 25d | Terms: 40/60
  *   Personality: Premium positioning, consultative, justifies cost
  *   Strategy: Frame price as risk mitigation, small discounts (3-5%), non-price concessions first
  *
- * SUP-003 "RapidGear Co" (simulated):
+ * SUP-003 "" (simulated):
  *   Quality: 4.0/5 | Price: Mid-range | Lead: 15d | Terms: 100% upfront
  *   Personality: Speed-focused, flexible, creative solutions
  *   Strategy: Restructure terms instead of price drops, emphasize speed advantage
@@ -26,16 +26,22 @@
  *
  * Response: 80-100 words max, includes specific numbers, plain text (no markdown)
  * Model: Claude Sonnet 4.5 (needs reasoning for counter-negotiation)
+ *
+ * ── KEY POINTS ──────────────────────────────────────────────────
+ *   • Three distinct personalities — cheap/premium/fast with different strategies
+ *   • Dynamic pricing: round 1 uses profile bounds, rounds 2+ anchor to previous offer
+ *   • Decaying concession curve: 12% → 8% → 5% — mimics real negotiation behavior
+ *   • Conversation memory tracks concessions made and competitor mentions
+ *   • Responses capped at 80-100 words — specific numbers, no fluff
+ * ────────────────────────────────────────────────────────────────
  */
 
+import { SystemMessage } from "@langchain/core/messages";
 import {
-    SystemMessage
-} from "@langchain/core/messages";
-import {
-    agentModel,
-    sonnetSemaphore,
-    trackUsage,
-    withSemaphore,
+  agentModel,
+  sonnetSemaphore,
+  trackUsage,
+  withSemaphore,
 } from "../lib/ai";
 import type { MessageData, QuotationItemData, SupplierProfile } from "./types";
 import { computePriceRange } from "./utils/calculations";
@@ -154,6 +160,8 @@ export function buildSupplierSystemPrompt(
   conversationHistory: MessageData[] = [],
   curveball?: string,
   isQuoteRequest = false,
+  roundNumber = 1,
+  previousOffer?: { totalCost: number } | null,
 ): string {
   const priceRange = computePriceRange(profile);
   const totalBaseline = baselineQuotation.reduce(
@@ -161,9 +169,20 @@ export function buildSupplierSystemPrompt(
     0,
   );
 
-  // Calculate explicit price bounds for system prompt
-  const minCost = totalBaseline * priceRange.low;
-  const maxCost = totalBaseline * priceRange.high;
+  // Round 1: use static price range from profile.
+  // Rounds 2+: anchor to previous offer with decaying concession curve.
+  //   R2 → up to 12% (first counteroffer, biggest move)
+  //   R3 → up to 8%
+  //   R4+ → up to 5% (hardening)
+  const isFirstOffer = roundNumber <= 1 || !previousOffer;
+  const maxConcessionPct =
+    roundNumber <= 2 ? 0.12 : roundNumber === 3 ? 0.08 : 0.05;
+  const minCost = isFirstOffer
+    ? totalBaseline * priceRange.low
+    : previousOffer!.totalCost * (1 - maxConcessionPct);
+  const maxCost = isFirstOffer
+    ? totalBaseline * priceRange.high
+    : previousOffer!.totalCost; // can't go ABOVE last offer
 
   const memorySection = buildSupplierMemory(conversationHistory, profile);
 
@@ -228,12 +247,18 @@ Based on your quality (${profile.qualityRating}/5), lead time (${profile.leadTim
 
 STRICT PRICE RANGE (YOU MUST STAY WITHIN THESE BOUNDS):
 - Baseline total cost: ${formatCurrency(totalBaseline)}
-- Your MINIMUM total (floor): ${formatCurrency(minCost)} (${priceRange.low}x baseline)
-- Your MAXIMUM total (ceiling): ${formatCurrency(maxCost)} (${priceRange.high}x baseline)
+- Your MINIMUM total (floor): ${formatCurrency(minCost)}${isFirstOffer ? ` (${priceRange.low}x baseline)` : ` (max ${Math.round(maxConcessionPct * 100)}% concession from your last offer of ${formatCurrency(previousOffer!.totalCost)})`}
+- Your MAXIMUM total (ceiling): ${formatCurrency(maxCost)}${isFirstOffer ? ` (${priceRange.high}x baseline)` : ` (your last offer — do not increase price)`}
 
 PRICING STRATEGY:
-- Round 1 (opening offer): Quote near ${formatCurrency(maxCost)} (upper end of your range)
-- Final offer (after concessions): Do NOT go below ${formatCurrency(minCost)}
+${
+  isFirstOffer
+    ? `- Round 1 (opening offer): Quote near ${formatCurrency(maxCost)} (upper end of your range)
+- Final offer (after concessions): Do NOT go below ${formatCurrency(minCost)}`
+    : `- This is round ${roundNumber}. Your last offer was ${formatCurrency(previousOffer!.totalCost)}.
+- You may concede up to ${Math.round(maxConcessionPct * 100)}% from your last offer if the buyer makes a compelling case.${roundNumber <= 2 ? `\n- This is early in the negotiation — show good faith with a meaningful price move to keep the deal alive.` : roundNumber === 3 ? `\n- The negotiation is maturing — concede moderately, start attaching conditions to any further drops.` : `\n- You're near your floor — push back firmly. Offer non-price concessions before any price reduction.`}
+- Do NOT repeat the same price — either concede or hold firm with a clear justification.`
+}
 - Volume discounts: Offer 3-8% off for large orders, staying above your floor
 - Non-price concessions: Faster delivery, extended warranty, free samples, flexible payment terms
 
@@ -310,6 +335,7 @@ CRITICAL FORMAT RULES:
 - No filler, no long greetings, no restating what was already said. Get to the point.
 - NEVER use email-style formatting: no "Subject:" lines, no "RE:" prefixes, no email headers. This is a live negotiation chat, not email.
 - NEVER use markdown bold (**text**) or other markup. Write plain, clean text.
+- NEVER quote a single blanket $/unit price for the entire order. Each product has a DIFFERENT unit price. Quote your TOTAL cost for the full order, or state a percentage discount. If you mention a per-unit price, specify which SKU it applies to.
 </behavior>`);
 
   return sections.join("\n\n");
