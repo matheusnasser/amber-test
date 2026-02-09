@@ -5,7 +5,7 @@ databases:
   - name: supplier-negotiation-postgres
     databaseName: supplierdb
     user: supplieruser
-    plan: starter
+    plan: basic
     region: oregon
     postgresMajorVersion: "16"
 
