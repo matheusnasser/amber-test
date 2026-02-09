@@ -13,12 +13,19 @@ export interface AuthRequest extends Request {
 
 /**
  * Middleware to verify JWT token from Authorization header
+ * Skips authentication for SSE stream endpoints (they handle auth via query param)
  */
 export function authenticateToken(
   req: AuthRequest,
   res: Response,
   next: NextFunction,
 ): void {
+  // Skip middleware for SSE stream endpoints - they handle query param auth internally
+  if (req.path.endsWith("/stream")) {
+    next();
+    return;
+  }
+
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
 

@@ -453,9 +453,7 @@ async function negotiateRoundNode(
       state.phase === "initial" &&
       !hasPriorOffer;
 
-    // Re-quote: use full 3-pillar analysis for all rounds (not fast-path)
-    // The re-quote RFQ message is still generated via brand-agent.ts but with pillar context
-    const skipPillars = isQuoteRequest;
+    const skipPillars = false;
 
     // Generate brand agent message via BrandGraph (3-pillar) or fast-path RFQ/re-quote
     const brandMessageContent = await createBrandMessage({

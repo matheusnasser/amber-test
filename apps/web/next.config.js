@@ -4,6 +4,7 @@ const nextConfig = {
     "@supplier-negotiation/database",
     "@supplier-negotiation/shared",
   ],
+  output: 'standalone',
 };
 
 module.exports = nextConfig;

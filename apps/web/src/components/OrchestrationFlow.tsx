@@ -1546,6 +1546,7 @@ export function OrchestrationFlow({ negotiation, activePillars, isLive, liveEven
   return (
     <div className="w-full h-full relative" style={{ minHeight: 500 }}>
       <ReactFlow
+        key={`${negotiation.negotiationId}-${negotiation.suppliers.length}-${negotiation.suppliers.flatMap(s => s.rounds).length}`}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
