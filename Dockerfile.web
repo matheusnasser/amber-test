@@ -8,6 +8,7 @@ WORKDIR /app
 # Copy root package files
 COPY package*.json ./
 COPY turbo.json ./
+COPY tsconfig.json ./
 
 # Copy workspace package files
 COPY packages/shared/package*.json ./packages/shared/
