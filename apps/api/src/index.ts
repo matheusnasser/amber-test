@@ -8,6 +8,7 @@ import { parseRouter } from "./routes/parse";
 import { negotiateRouter } from "./routes/negotiate";
 import { curveballRouter } from "./routes/curveball";
 import { purchaseOrderRouter } from "./routes/purchase-orders";
+import { seedRouter } from "./routes/seed";
 import { authenticateToken } from "./middleware/auth";
 
 const app = express();
@@ -29,6 +30,7 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 app.use("/api/auth", authRouter);
+app.use("/api/seed", seedRouter);
 
 // Protected routes (authentication required)
 app.use("/api/parse", authenticateToken, parseRouter);

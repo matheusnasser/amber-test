@@ -27,6 +27,7 @@ WORKDIR /app
 # Copy source code
 COPY packages ./packages
 COPY apps/api ./apps/api
+COPY data ./data
 
 # Generate Prisma client
 RUN npx prisma generate --schema ./packages/database/prisma/schema.prisma
@@ -57,6 +58,9 @@ COPY --from=builder --chown=apiuser:nodejs /app/packages/shared/package*.json ./
 COPY --from=builder --chown=apiuser:nodejs /app/packages/database/dist ./packages/database/dist
 COPY --from=builder --chown=apiuser:nodejs /app/packages/database/prisma ./packages/database/prisma
 COPY --from=builder --chown=apiuser:nodejs /app/packages/database/package*.json ./packages/database/
+
+# Copy product catalog CSV for seeding
+COPY --from=builder --chown=apiuser:nodejs /app/data ./data
 
 # Copy root files
 COPY --from=builder --chown=apiuser:nodejs /app/package*.json ./
